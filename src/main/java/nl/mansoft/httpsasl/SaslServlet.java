@@ -175,7 +175,7 @@ public class SaslServlet extends HttpServlet {
                     LOGGER.log(Level.INFO, "Sasl service was cleaned up");
                 } else {
                     String serverFactories = getSaslServerFactories();
-                    response.setHeader("WWW-Authenticate", "SASL mech=\"" + serverFactories + "\" realm=\"test-realm.nl\"");
+                    response.setHeader("WWW-Authenticate", "SASL mech=\"" + serverFactories + "\",realm=\"test-realm.nl\"");
                     response.sendError(401, "Unauthorized, SASL Server factories: " + serverFactories);
                 }
             }

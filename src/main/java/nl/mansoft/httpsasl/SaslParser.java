@@ -17,23 +17,24 @@ import java.util.regex.Pattern;
 public class SaslParser {
     static final String RE_SASL_MECH = "[A-Z0-9-_]{1,20}";
     static final String RE_MECHSTRING = "\"(" + RE_SASL_MECH + "(?:[ ]" + RE_SASL_MECH + ")*)\"";
-    static final String RE_DNSSTRING = "\"([a-zA-Z0-9-_]+(?:\\.[a-zA-Z0-9-_]+)+)\"";
+    // https://stackoverflow.com/a/249937/433626
+    static final String RE_REALMSTRING = "\"((?:[^\"\\\\]|\\\\.)*)\""; // "((?:[^"\\]|\\.)*)"
 
     static final String RE_BWS = "[ \\t]*";
     static final String RE_OWS = RE_BWS;
-    static final String RE_TOKEN68 = "([a-zA-Z0-9-._~+/]+=*)";
+    static final String RE_BASE64STRING = "\"([a-zA-Z0-9-._~+/]*=*)\"";
     static final String RE_AUTH_PARAM =
         "(?:" +
-            "([CcSs][2][CcSs])" + RE_BWS + "=" + RE_BWS + RE_TOKEN68 +
+            "([CcSs][2][CcSs])" + RE_BWS + "=" + RE_BWS + RE_BASE64STRING +
             "|" +
             "([Mm][Ee][Cc][Hh])" + RE_BWS + "=" + RE_BWS + RE_MECHSTRING +
             "|" +
-            "([Rr][Ee][Aa][Ll][Mm])" + RE_BWS + '=' + RE_BWS + RE_DNSSTRING +
+            "([Rr][Ee][Aa][Ll][Mm])" + RE_BWS + '=' + RE_BWS + RE_REALMSTRING +
         ")"
     ;
     static final String RE_AUTH_SCHEME = "[Ss][Aa][Ss][Ll]";
-    static final String RE_CREDENTIALS = RE_AUTH_SCHEME + "(?:[ ]+(" + RE_AUTH_PARAM + "(?:" +
-        RE_OWS + "," + RE_OWS + RE_AUTH_PARAM + ")+)?)";
+    static final String RE_CREDENTIALS = "^(?:.*,)?[ \\t]*" + RE_AUTH_SCHEME + "(?:[ ]+(" + RE_AUTH_PARAM + "(?:" +
+        RE_OWS + "," + RE_OWS + RE_AUTH_PARAM + ")*)?)[ \\t]*(?:,.*)?$";
 
 
     public static Map<String, String> parse(String input) {
@@ -44,7 +45,7 @@ public class SaslParser {
         System.out.println(regexp);
         Pattern authorization_stx = Pattern.compile(regexp);
         Matcher matcher1 = authorization_stx.matcher(input);
-        if (matcher1.matches()) {
+        if (matcher1.matches() || true) {
             Pattern auth_param_finder = Pattern.compile(RE_AUTH_PARAM);
             Matcher matcher2 = auth_param_finder.matcher(input);
             map = new HashMap<>();

@@ -7,6 +7,7 @@ package nl.mansoft.httpsasl;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.security.Security;
 import java.util.Base64;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -24,10 +25,11 @@ import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 import javax.security.sasl.SaslServerFactory;
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import nl.mansoft.security.sasl.Provider;
 
 /**
  *
@@ -50,6 +52,12 @@ public class SaslServlet extends HttpServlet {
             }
         }
         return mechanisms;
+    }
+
+    @Override
+    public void init() {
+      Provider provider = new Provider();
+      Security.insertProviderAt(provider, 1);
     }
 
     public static String stringChallengeOrResponse(byte[] data) {

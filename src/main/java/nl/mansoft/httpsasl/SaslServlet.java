@@ -10,7 +10,6 @@ import java.io.PrintWriter;
 import java.security.Security;
 import java.util.Base64;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -29,6 +28,11 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import nl.mansoft.security.sasl.Provider;
 
 /**
@@ -38,9 +42,7 @@ import nl.mansoft.security.sasl.Provider;
 public class SaslServlet extends HttpServlet {
     private static Logger LOGGER = Logger.getLogger(SaslServlet.class.getName());
     private static final String HTTP_REALM = "Java Servlet Realm";
-    private Map<Integer, SaslServer> saslServers = new HashMap<>();
-    private String name;
-    private String text;
+
     public static String getSaslServerFactories() {
         String mechanisms = null;
         Enumeration<SaslServerFactory> serverFactories = Sasl.getSaslServerFactories();
@@ -60,11 +62,67 @@ public class SaslServlet extends HttpServlet {
       Security.insertProviderAt(provider, 1);
     }
 
-    public static String stringChallengeOrResponse(byte[] data) {
-        return data == null ? "(null)" : new String(data);
+    private void sendAnswer(SaslServer saslServer, HttpServletRequest request, HttpServletResponse response, String answer) throws IOException {
+        try (PrintWriter out = response.getWriter()) {
+            out.println(answer);
+        }
     }
 
-    public void processCallbacks(Callback[] callbacks) {
+    private byte[] getc2s(Map<String, String> map) {
+        byte[] c2s = new byte[0];
+        String c2sBase64 = map.get("c2s");
+        if (c2sBase64 != null) {
+            LOGGER.log(Level.INFO, c2sBase64);
+            c2s = Base64.getDecoder().decode(c2sBase64);
+            LOGGER.log(Level.INFO, new String(c2s));
+        } else {
+            LOGGER.log(Level.INFO, "c2sBase64 is null");
+        }
+        return c2s;
+    }
+
+    private SaslServer deserializeSaslServer(String s2sBase64) {
+        SaslServer saslServer = null;
+        if (s2sBase64 != null) {
+          try {
+            LOGGER.log(Level.INFO, s2sBase64);
+            byte s2sBytes[] = Base64.getDecoder().decode(s2sBase64);
+            ByteArrayInputStream bais = new ByteArrayInputStream(s2sBytes);
+            ObjectInputStream ois = new ObjectInputStream(bais);
+            saslServer = (SaslServer) ois.readObject();
+            ois.close();
+          } catch (IOException | ClassNotFoundException ex) {
+            Logger.getLogger(SaslServlet.class.getName()).log(Level.SEVERE, null, ex);
+          }
+        } else {
+            LOGGER.log(Level.INFO, "s2sBase64 is null");
+        }
+        return saslServer;
+    }
+
+    private String serializeSaslServer(SaslServer saslServer) {
+      String s2sBase64 = "";
+      if (saslServer != null) {
+        try {
+          ByteArrayOutputStream baos = new ByteArrayOutputStream();
+          ObjectOutputStream oos = new ObjectOutputStream(baos);
+          oos.writeObject(saslServer);
+          oos.close();
+          s2sBase64 = Base64.getEncoder().encodeToString(baos.toByteArray());
+        } catch (IOException ex) {
+          Logger.getLogger(SaslServlet.class.getName()).log(Level.SEVERE, null, ex);
+        }
+      }
+      LOGGER.log(Level.INFO, s2sBase64);
+      return s2sBase64;
+    }
+
+    private static class MyCallbackHandler implements CallbackHandler, Serializable {
+      private String name;
+      private String text;
+
+      @Override
+      public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
         LOGGER.log(Level.INFO, "processCallbacks");
         for (Callback callback : callbacks) {
             LOGGER.log(Level.INFO, callback.getClass().getName());
@@ -85,95 +143,19 @@ public class SaslServlet extends HttpServlet {
                 ((AuthorizeCallback) callback).setAuthorized("henri".equals(name));
             }
         }
-    }
-
-    private void sendAnswer(SaslServer saslServer, HttpServletRequest request, HttpServletResponse response, String answer) throws IOException {
-        try (PrintWriter out = response.getWriter()) {
-            out.println(answer);
-        }
-        if (cleanupSaslService(saslServer)) {
-            LOGGER.log(Level.INFO, "Sasl service was cleaned up");
-        }
-    }
-
-    private boolean cleanupSaslService(SaslServer saslServer) {
-        boolean result = saslServer != null;
-        LOGGER.log(Level.INFO, "cleanupSaslService(): SASL service " + (result ? "present" : "not present"));
-        try {
-            if (result) {
-                saslServer.dispose();
-                saslServers.remove(saslServer.hashCode());
-                saslServer = null;
-            }
-        } catch (SaslException ex) {
-            LOGGER.log(Level.SEVERE, "Error disposing SaslService");
-        }
-        return result;
-    }
-
-    private byte[] getc2s(Map<String, String> map) {
-        byte[] c2s = new byte[0];
-        String c2sBase64 = map.get("c2s");
-        if (c2sBase64 != null) {
-            LOGGER.log(Level.INFO, c2sBase64);
-            c2s = Base64.getDecoder().decode(c2sBase64);
-            LOGGER.log(Level.INFO, new String(c2s));
-        } else {
-            LOGGER.log(Level.INFO, "c2sBase64 is null");
-        }
-        return c2s;
-    }
-
-    private int byteToInt(byte b) {
-      return b & 0xff;
-    }
-
-    private byte intToByte(int i) {
-      return (byte) (i & 0xff);
-    }
-
-    private Integer bytesToInteger(byte bytes[]) {
-      Integer integer = null;
-      if (bytes != null && bytes.length == 4) {
-        integer = byteToInt(bytes[0]) | byteToInt(bytes[1]) << 8 | byteToInt(bytes[2]) << 16 | byteToInt(bytes[3]) << 24;
       }
-      return integer;
     }
 
-    private byte[] integerToBytes(Integer integer) {
-      byte bytes[] = null;
-      if (integer != null) {
-        bytes = new byte[4];
-        bytes[0] = intToByte(integer);
-        bytes[1] = intToByte(integer >> 8);
-        bytes[2] = intToByte(integer >> 16);
-        bytes[3] = intToByte(integer >> 24);
-      }
-      return bytes;
+    private String getWwwAuthenticate(byte[] challenge, SaslServer saslServer)
+    {
+      String challengeBase64 = Base64.getEncoder().encodeToString(challenge);
+      String s2s = serializeSaslServer(saslServer);
+      String authenticate =
+          "SASL s2s=\"" + s2s +
+          "\",s2c=\"" + challengeBase64 + "\"";
+      System.out.println(authenticate);
+      return authenticate;
     }
-
-    private SaslServer getSaslServer(Map<String, String> map) {
-        SaslServer saslServer = null;
-        String s2sBase64 = map.get("s2s");
-        if (s2sBase64 != null) {
-            LOGGER.log(Level.INFO, s2sBase64);
-            byte s2sBytes[] = Base64.getDecoder().decode(s2sBase64);
-            saslServer = saslServers.get(bytesToInteger(s2sBytes));
-            LOGGER.log(Level.INFO, Integer.toHexString(saslServer.hashCode()));
-        } else {
-            LOGGER.log(Level.INFO, "s2sBase64 is null");
-        }
-        return saslServer;
-    }
-
-    private String SaslServerToS2s(SaslServer saslServer) {
-        LOGGER.log(Level.INFO, Integer.toHexString(saslServer.hashCode()));
-        byte s2sBytes[] = integerToBytes(saslServer.hashCode());
-        String s2sBase64 = Base64.getEncoder().encodeToString(s2sBytes);
-        LOGGER.log(Level.INFO, s2sBase64);
-        return s2sBase64;
-    }
-
     /**
      * Processes requests for both HTTP <code>GET</code> and <code>POST</code>
      * methods.
@@ -190,43 +172,31 @@ public class SaslServlet extends HttpServlet {
             response.setContentType("text/plain;charset=UTF-8");
             String authorization = request.getHeader("Authorization");
             if (authorization != null) {
-                byte[] challenge = null;
                 Map<String, String> map = SaslParser.parse(authorization);
                 if (map != null) {
-                    String challengeBase64 = null;
                     String mechanism = map.get("mech");
-                    saslServer = getSaslServer(map);
+                    saslServer = deserializeSaslServer(map.get("s2s"));
                     if (saslServer == null) {
-                        saslServer = Sasl.createSaslServer(mechanism, "HTTP", request.getServerName(), null, new CallbackHandler() {
-                            @Override
-                            public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
-                                processCallbacks(callbacks);
-                            }
-                        });
-                        saslServers.put(saslServer.hashCode(), saslServer);
+                        saslServer = Sasl.createSaslServer(mechanism, "HTTP", request.getServerName(), null, new MyCallbackHandler());
                     }
                     if (saslServer != null) {
                         try {
                             byte[] c2s = getc2s(map);
-                            challenge = saslServer.evaluateResponse(c2s);
+                            byte[] challenge = saslServer.evaluateResponse(c2s);
                             LOGGER.log(Level.INFO, new String(challenge, "UTF-8"));
-                            challengeBase64 = Base64.getEncoder().encodeToString(challenge);
-                            String s2s = SaslServerToS2s(saslServer);
-                            String authenticate =
-                                "SASL s2s=\"" + s2s +
-                                "\",s2c=\"" + challengeBase64 + "\"";
-                            System.out.println(authenticate);
-                            response.setHeader("WWW-Authenticate", authenticate);
                             if (saslServer.isComplete()) {
                                 LOGGER.log(Level.INFO, "saslServer.isComplete()");
+                                response.setHeader("WWW-Authenticate", getWwwAuthenticate(challenge, null));
                                 sendAnswer(saslServer, request, response, new String(c2s, "UTF-8"));
                             } else {
+                                response.setHeader("WWW-Authenticate", getWwwAuthenticate(challenge, saslServer));
                                 response.sendError(401, "Unauthorized, challenge: " + new String(challenge, "UTF-8"));
                             }
                         } catch (SaslException ex) {
                             LOGGER.log(Level.SEVERE, ex.getMessage());
-                            cleanupSaslService(saslServer);
                             response.sendError(401, "Unauthorized, invalid credentials");
+                        } finally {
+                          saslServer.dispose();
                         }
                     } else {
                         System.out.println("saslServer is null");
@@ -241,7 +211,6 @@ public class SaslServlet extends HttpServlet {
             }
         } catch (SaslException ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage());
-            cleanupSaslService(saslServer);
         }
     }
 

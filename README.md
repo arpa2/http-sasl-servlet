@@ -5,4 +5,4 @@ This Java servlet demonstrates authentication using [HTTP SASL](https://datatrac
 <img src="https://mansoft.nl/arpa2/http-sasl-client-java.svg" width="100%"/>
 
 ## Running SaslServlet
-After cloning open the directory in Netbeans and deploy the .war on a Java Application Servet like tomcat
+After cloning open the directory in Netbeans and deploy the .war on a Java Application Servlet like tomcat

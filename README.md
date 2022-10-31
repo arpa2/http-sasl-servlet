@@ -6,3 +6,6 @@ This Java servlet demonstrates authentication using [HTTP SASL](https://datatrac
 
 ## Running SaslServlet
 After cloning open the directory in Netbeans and deploy the .war on a Java Application Servlet like tomcat
+
+
+> Project is supported by the [NLnet Foundation](https://nlnet.nl/) as part of the [SASL Works](https://nlnet.nl/project/SASLworks) project

@@ -33,6 +33,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.util.Collection;
 import nl.mansoft.security.sasl.Provider;
 
 /**
@@ -156,6 +157,25 @@ public class SaslServlet extends HttpServlet {
       System.out.println(authenticate);
       return authenticate;
     }
+
+    static public void printRequestHeaders(HttpServletRequest httpRequest) {
+        Enumeration<String> headerNames = httpRequest.getHeaderNames();
+        if (headerNames != null) {
+            while (headerNames.hasMoreElements()) {
+                String headerName = headerNames.nextElement();
+                LOGGER.log(Level.INFO, headerName + ": " + httpRequest.getHeader(headerName));
+            }
+        }
+    }
+    static public void printResponseHeaders(HttpServletResponse httpRequest) {
+        Collection<String> headerNames = httpRequest.getHeaderNames();
+
+        if (headerNames != null) {
+            for (String header: headerNames) {
+                LOGGER.log(Level.INFO, header + ": " + httpRequest.getHeader(header));
+            }
+        }
+    }
     /**
      * Processes requests for both HTTP <code>GET</code> and <code>POST</code>
      * methods.
@@ -167,6 +187,7 @@ public class SaslServlet extends HttpServlet {
      */
     protected void processRequest(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
+        printRequestHeaders(request);
         SaslServer saslServer = null;
         try {
             response.setContentType("text/plain;charset=UTF-8");
@@ -194,7 +215,9 @@ public class SaslServlet extends HttpServlet {
                             }
                         } catch (SaslException ex) {
                             LOGGER.log(Level.SEVERE, ex.getMessage());
-                            response.sendError(401, "Unauthorized, invalid credentials");
+                            String serverFactories = getSaslServerFactories();
+                            response.setHeader("WWW-Authenticate", "SASL mech=\"" + serverFactories + "\",realm=\"" + HTTP_REALM + "\"");
+                            response.sendError(401, "Unauthorized, SASL Server factories: " + serverFactories);
                         } finally {
                           saslServer.dispose();
                         }
@@ -209,6 +232,7 @@ public class SaslServlet extends HttpServlet {
                 response.setHeader("WWW-Authenticate", "SASL mech=\"" + serverFactories + "\",realm=\"" + HTTP_REALM + "\"");
                 response.sendError(401, "Unauthorized, SASL Server factories: " + serverFactories);
             }
+            printResponseHeaders(response);
         } catch (SaslException ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage());
         }

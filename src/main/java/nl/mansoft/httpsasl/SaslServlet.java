@@ -28,6 +28,12 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.security.Principal;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
+import javax.security.auth.Subject;
+import javax.security.auth.login.LoginContext;
+import javax.security.auth.login.LoginException;
 
 /**
  *
@@ -39,17 +45,123 @@ public class SaslServlet extends HttpServlet {
     private Map<Integer, SaslServer> saslServers = new HashMap<>();
     private String name;
     private String text;
+    private LoginContext context;
+
     public static String getSaslServerFactories() {
         String mechanisms = null;
         Enumeration<SaslServerFactory> serverFactories = Sasl.getSaslServerFactories();
         while (serverFactories.hasMoreElements()) {
             SaslServerFactory serverFactory = serverFactories.nextElement();
-            System.out.println(serverFactory.getClass().getName());
+            LOGGER.log(Level.INFO, serverFactory.getClass().getName());
             for (String mechanism : serverFactory.getMechanismNames(null)) {
                 mechanisms = mechanisms == null ? mechanism : mechanisms + " " + mechanism;
             }
         }
         return mechanisms;
+    }
+
+    @Override
+    public void init() throws ServletException {
+        try {
+            context = new LoginContext("server");
+            context.login();
+            String principals = "Authenticated principals: ";
+            for (Principal principal : context.getSubject().getPrincipals()) {
+                principals += principal.getName() + " ";
+            }
+            LOGGER.log(Level.INFO, principals);
+        } catch (LoginException ex) {
+            Logger.getLogger(SaslServlet.class.getName()).log(Level.SEVERE, null, ex);
+            context = null;
+        }
+    }
+
+    @Override
+    public void destroy() {
+        try {
+            if (context != null) {
+                context.logout();
+            }
+        } catch (LoginException ex) {
+            Logger.getLogger(SaslServlet.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+
+    private Subject getSubject() {
+        return context == null ? null : context.getSubject();
+    }
+
+    private static final String getHexBytes(byte[] bytes, int pos, int len) {
+
+        StringBuffer sb = new StringBuffer();
+        for (int i = pos; i < (pos+len); i++) {
+
+            int b1 = (bytes[i]>>4) & 0x0f;
+            int b2 = bytes[i] & 0x0f;
+
+            sb.append(Integer.toHexString(b1));
+            sb.append(Integer.toHexString(b2));
+            sb.append(' ');
+        }
+        return sb.toString();
+    }
+
+    private static final String getHexBytes(byte[] bytes) {
+        return getHexBytes(bytes, 0, bytes.length);
+    }
+
+    public static String bytesToString(byte[] bytes) {
+        boolean allAscii = true;
+        for (byte b : bytes) {
+            if (b < 0x20) {
+                allAscii = false;
+                break;
+            }
+        }
+        return allAscii ? new String(bytes) : getHexBytes(bytes);
+    }
+
+    public static void printBytes(String prompt, byte[] bytes) {
+        LOGGER.log(Level.INFO, prompt + ": " + bytesToString(bytes));
+    }
+
+    private SaslServer createSaslServer(String mechanism, String serverName) throws SaslException {
+        return Sasl.createSaslServer(mechanism, "HTTP", serverName, null, new CallbackHandler() {
+            @Override
+            public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
+                processCallbacks(callbacks);
+            }
+        });
+    }
+
+    class CreateSaslServer implements PrivilegedExceptionAction<SaslServer> {
+        private final String mechanism;
+        private final String serverName;
+
+        CreateSaslServer(String mechanism, String serverName) {
+            this.mechanism = mechanism;
+            this.serverName = serverName;
+        }
+
+        @Override
+        public SaslServer run() throws SaslException {
+            return createSaslServer(mechanism, serverName);
+        }
+    }
+
+    class EvaluateResponse implements PrivilegedExceptionAction<byte[]>{
+        private final SaslServer saslServer;
+        private final byte[] response;
+
+        public EvaluateResponse(SaslServer saslServer, byte[] response) {
+            this.saslServer = saslServer;
+            this.response = response;
+        }
+
+        @Override
+        public byte[] run() throws SaslException {
+            return saslServer.evaluateResponse(response);
+        }
     }
 
     public static String stringChallengeOrResponse(byte[] data) {
@@ -74,7 +186,7 @@ public class SaslServlet extends HttpServlet {
                 LOGGER.log(Level.INFO, text);
                 realmCallback.setText(text);
             } else if (callback instanceof AuthorizeCallback) {
-                ((AuthorizeCallback) callback).setAuthorized("henri".equals(name));
+                ((AuthorizeCallback) callback).setAuthorized(true);
             }
         }
     }
@@ -109,7 +221,7 @@ public class SaslServlet extends HttpServlet {
         if (c2sBase64 != null) {
             LOGGER.log(Level.INFO, c2sBase64);
             c2s = Base64.getDecoder().decode(c2sBase64);
-            LOGGER.log(Level.INFO, new String(c2s));
+            printBytes("c2s", c2s);
         } else {
             LOGGER.log(Level.INFO, "c2sBase64 is null");
         }
@@ -151,7 +263,11 @@ public class SaslServlet extends HttpServlet {
             LOGGER.log(Level.INFO, s2sBase64);
             byte s2sBytes[] = Base64.getDecoder().decode(s2sBase64);
             saslServer = saslServers.get(bytesToInteger(s2sBytes));
-            LOGGER.log(Level.INFO, Integer.toHexString(saslServer.hashCode()));
+            if (saslServer == null) {
+                LOGGER.log(Level.SEVERE, "could not get saslServer from" + s2sBase64);
+            } else {
+                LOGGER.log(Level.INFO, Integer.toHexString(saslServer.hashCode()));
+            }
         } else {
             LOGGER.log(Level.INFO, "s2sBase64 is null");
         }
@@ -166,6 +282,11 @@ public class SaslServlet extends HttpServlet {
         return s2sBase64;
     }
 
+    private static void outputMechs(HttpServletResponse response) throws IOException {
+        String serverFactories = getSaslServerFactories();
+        response.setHeader("WWW-Authenticate", "SASL mech=\"" + serverFactories + "\",realm=\"" + HTTP_REALM + "\"");
+        response.sendError(401, "Unauthorized, SASL Server factories: " + serverFactories);
+    }
     /**
      * Processes requests for both HTTP <code>GET</code> and <code>POST</code>
      * methods.
@@ -189,47 +310,55 @@ public class SaslServlet extends HttpServlet {
                     String mechanism = map.get("mech");
                     saslServer = getSaslServer(map);
                     if (saslServer == null) {
-                        saslServer = Sasl.createSaslServer(mechanism, "HTTP", request.getServerName(), null, new CallbackHandler() {
-                            @Override
-                            public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
-                                processCallbacks(callbacks);
-                            }
-                        });
+                        try {
+                            saslServer = Subject.doAs(
+                                getSubject(),
+                                new CreateSaslServer(
+                                    mechanism,
+                                    request.getServerName()
+                                )
+                            );
+                        } catch (PrivilegedActionException ex) {
+                            Logger.getLogger(SaslServlet.class.getName()).log(Level.SEVERE, null, ex);
+                        }
                         saslServers.put(saslServer.hashCode(), saslServer);
                     }
                     if (saslServer != null) {
+                        LOGGER.log(Level.INFO, "not complete");
                         try {
                             byte[] c2s = getc2s(map);
-                            challenge = saslServer.evaluateResponse(c2s);
-                            LOGGER.log(Level.INFO, new String(challenge, "UTF-8"));
-                            challengeBase64 = Base64.getEncoder().encodeToString(challenge);
+                            challenge = Subject.doAs(getSubject(), new EvaluateResponse(saslServer, c2s));
                             String s2s = SaslServerToS2s(saslServer);
                             String authenticate =
-                                "SASL s2s=\"" + s2s +
-                                "\",s2c=\"" + challengeBase64 + "\"";
-                            System.out.println(authenticate);
+                                "SASL s2s=\"" + s2s+ "\"";
+                            if (challenge != null) {
+                                challengeBase64 = Base64.getEncoder().encodeToString(challenge);
+                                authenticate += ",s2c=\"" + challengeBase64 + "\"";
+                            }
+                            LOGGER.log(Level.INFO, authenticate);
                             response.setHeader("WWW-Authenticate", authenticate);
                             if (saslServer.isComplete()) {
-                                LOGGER.log(Level.INFO, "saslServer.isComplete()");
-                                sendAnswer(saslServer, request, response, new String(c2s, "UTF-8"));
+                                LOGGER.log(Level.INFO, "saslServer complete");
+                                sendAnswer(saslServer, request, response, bytesToString(c2s));
                             } else {
+                                LOGGER.log(Level.INFO, "saslServer not complete");
                                 response.sendError(401, "Unauthorized, challenge: " + new String(challenge, "UTF-8"));
                             }
                         } catch (SaslException ex) {
                             LOGGER.log(Level.SEVERE, ex.getMessage());
                             cleanupSaslService(saslServer);
-                            response.sendError(401, "Unauthorized, invalid credentials");
+                            outputMechs(response);
+                        } catch (PrivilegedActionException ex) {
+                            Logger.getLogger(SaslServlet.class.getName()).log(Level.SEVERE, null, ex);
                         }
                     } else {
-                        System.out.println("saslServer is null");
+                        LOGGER.log(Level.SEVERE, "saslServer is null");
                     }
                 } else {
-                    System.out.println("map is null");
+                    LOGGER.log(Level.SEVERE, "map is null");
                 }
             } else {
-                String serverFactories = getSaslServerFactories();
-                response.setHeader("WWW-Authenticate", "SASL mech=\"" + serverFactories + "\",realm=\"" + HTTP_REALM + "\"");
-                response.sendError(401, "Unauthorized, SASL Server factories: " + serverFactories);
+                outputMechs(response);
             }
         } catch (SaslException ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage());
